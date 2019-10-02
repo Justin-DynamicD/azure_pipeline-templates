@@ -1,0 +1,101 @@
+parameters:
+  module_name: ''
+  analyzer_profile: 'PSGallery'
+
+jobs:
+  - job: testModule
+    displayName: Testing ${{ parameters['module_name'] }}
+    pool:
+      vmImage: 'windows-2019'
+    steps:
+      - task: PowerShell@2
+        name: testModuleManifest
+        displayName: Test Module Manifest
+        condition: succeeded()
+        inputs:
+          targetType: inline
+          script: Test-ModuleManifest .\\${{ parameters['module_name'] }}\\${{ parameters['module_name'] }}.psd1
+
+      - task: PowerShell@2
+        name: executePsScriptAnalyzer
+        displayName: Test PsScriptAnalyzer
+        condition: succeeded()
+        inputs:
+          targetType: inline
+          script: |
+            $analyzerModule = Get-Module -Name PSScriptAnalyzer -ListAvailable | Measure-Object
+            Write-Output "Number of PSScriptAnalyzer modules is [$($analyzerModule.Count)]"
+
+            if ($analyzerModule.Count -eq 0)
+            {
+                Write-Output "Installing Nuget provider"
+                Install-PackageProvider -Name NuGet -Force -Confirm:$false -ErrorVariable installNugetError
+
+                Write-Output "Trusting PSGallery"
+                Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+
+                Write-Output "Importing PowershellGet"
+                Import-PackageProvider -Name PowerShellGet -Force
+
+                Write-Output "Installing PSScriptAnalyzer module"
+                Install-Module -Name PSScriptAnalyzer -Confirm:$false -Force -Repository "PSGallery" -SkipPublisherCheck
+                Write-Output "Installed PSScriptAnalyzer"
+            }
+
+            Write-Output "Importing PSScriptAnalyzer"
+            Import-Module -Name PSScriptAnalyzer
+
+            Invoke-ScriptAnalyzer -Path .\\${{ parameters['module_name'] }} -Recurse -ReportSummary -Profile ${{ parameters['analyzer_profile'] }} -EnableExit
+
+      - task: PowerShell@2
+        name: getVersion
+        displayName: Get major.minor version
+        condition: succeeded()
+        inputs:
+          targetType: inline
+          script: |
+            $majorMinorVersion = (Test-ModuleManifest .\\${{ parameters['module_name'] }}\\${{ parameters['module_name'] }}.psd1).Version.ToString()
+            Write-Output "##vso[task.setvariable variable=majorMinorVersion;isOutput=true]$majorMinorVersion"
+
+  - job: publishModule
+    displayName: Publish Module
+    dependsOn: testModule
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    pool:
+      vmImage: 'windows-2019'
+    variables:
+      - group: PowerShell Gallery
+      - name: majorMinorVersion
+        value: $[ dependencies.testModule.outputs['getVersion.majorMinorVersion'] ]
+      - name: semanticVersion
+        value: $[counter(dependencies.testModule.outputs['getVersion.majorMinorVersion'], 0)]
+    steps:
+      - task: PowerShell@2
+        name: updateVer
+        displayName: Update version in manifest
+        condition: succeeded()
+        inputs:
+          targetType: inline
+          script: | 
+            Update-ModuleManifest .\\${{ parameters['module_name'] }}\\${{ parameters['module_name'] }}.psd1 -ModuleVersion "$($env:majorMinorVersion).$($env:semanticVersion)"
+            Write-Output "##vso[task.setvariable variable=module_version;]$($env:majorMinorVersion).$($env:semanticVersion)"
+
+      - task: PowerShell@2
+        name: publishModule
+        displayName: Publish Module
+        condition: succeeded()
+        inputs:
+          targetType: inline
+          script: Publish-Module -Path .\\${{ parameters['module_name'] }} -NuGetApiKey $env:PSGALLERY
+        env:
+          PSGALLERY: $(API_KEY)
+
+      - task: GitHubRelease@0
+        displayName: Tag release info in GitHub
+        condition: succeeded()
+        inputs:
+          gitHubConnection: GitHub
+          repositoryName: '$(Build.Repository.Name)'
+          tagSource: manual
+          tag: v$(module_version)
+          addChangeLog: true
