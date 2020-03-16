@@ -6,11 +6,19 @@ param (
   [Array]$HashiTools = @(
     [PSCustomObject]@{
       Name = "packer"
-      Version = "1.4.2"
+      #Version = "1.4.2" #optionally supported verison here
     }
     [PSCustomObject]@{ 
       Name = "terraform"
-      Version = "0.12.5"
+    }
+    [PSCustomObject]@{ 
+      Name = "vault"
+    }
+    [PSCustomObject]@{ 
+      Name = "consul"
+    }
+    [PSCustomObject]@{ 
+      Name = "nomad"
     }
   ),
 
@@ -115,7 +123,7 @@ foreach ($tool in $HashiTools) {
   #Check for the locally installed tool and validate version
   $toolPath = "$($TargetPath)\$($tool.Name).exe"
   if (Test-Path $toolPath -PathType Leaf) {
-    $toolCurr = & $toolPath -version
+    $toolCurr = & $toolPath --version
     $toolCurr = $toolCurr.split('\n')[0] # grab only the first line
     $toolCurr = $toolCurr.split('(')[0].trim() # drop hash info nomad uses
     $toolCurr = $toolCurr.split("v")[-1] # split by version, grab the last entry
