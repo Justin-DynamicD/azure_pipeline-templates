@@ -2,11 +2,12 @@ param (
   [string]$TargetPath = ".\",
   [switch]$AddToPath,
   [switch]$AddToPipelinePath,
+  [string]$VersionControlFile = "modules.json",
   [string]$HashiURL = "https://releases.hashicorp.com",
-  [Array]$HashiTools = @(
+  [System.Collections.ArrayList]$HashiTools = @(
     [PSCustomObject]@{
       Name = "packer"
-      #Version = "1.4.2" #optionally supported verison here
+      #Version = "1.4.2" #optionally supported verison here, must be a string
     }
     [PSCustomObject]@{ 
       Name = "terraform"
@@ -22,30 +23,13 @@ param (
     }
   ),
 
-  [Array]$ExtraModules = @(
-    [PSCustomObject]@{ 
-      Owner = "jetbrains-infra" 
-      Repo = "packer-builder-vsphere"
-      FileName = "packer-builder-vsphere-iso.exe"
-      DownloadName = "packer-builder-vsphere-iso.exe"
-      Unzip = $false
-      Version = "v2.3"
-    }
-    [PSCustomObject]@{ 
-      Owner = "jetbrains-infra" 
-      Repo = "packer-builder-vsphere"
-      FileName = "packer-builder-vsphere-clone.exe"
-      DownloadName = "packer-builder-vsphere-clone.exe"
-      Unzip = $false
-      Version = "v2.3"
-    }
+  [System.Collections.ArrayList]$ExtraModules = @(
     [PSCustomObject]@{ 
       Owner = "rgl" 
       Repo = "packer-provisioner-windows-update"
       FileName = "packer-provisioner-windows-update.exe"
       DownloadName = "packer-provisioner-windows-update-windows.zip"
       Unzip = $true
-      Version = "v0.7.1"
     }
     [PSCustomObject]@{ 
       Owner = "gruntwork-io" 
@@ -53,7 +37,7 @@ param (
       FileName = "terragrunt.exe"
       DownloadName = "terragrunt_windows_amd64.exe"
       Unzip = $false
-      Version = "v0.19.11"
+      #Mode = "remove" # mode allows uninstall to occur for depricated modules, "replace" forces repalcement, "upgrade" only rolls forward
     }
   )
 )
@@ -152,20 +136,74 @@ foreach ($tool in $HashiTools) {
 #
 ###
 
+# there is no version control in most modules, so to combat this, this module
+# maintains a json file in the install path with versions installed.
+# This means outside tampering can lead to inaccurate versions installed,
+# as such 'mode' can be set to replace in order to force updates or changes
+# or remove to delete legacy entires.
+
+$trackedModules = New-Object -TypeName "System.Collections.ArrayList"
+
+# import file if it exists, else start with an empty list
+$versionPath = "$($TargetPath.Trim("\"))\$($VersionControlFile)"
+if (Test-Path -Path $versionPath -type leaf) {
+  [System.Collections.ArrayList]$existingModules = Get-Content $versionPath | ConvertFrom-Json
+}
+else {
+  $existingModules = New-Object -TypeName "System.Collections.ArrayList"
+}
+
 # looping all the defined modules
 foreach ($module in $ExtraModules) {
 
+  # If existing module is defined, grab its version
+  $oldModule = ($existingModules | Where-Object { $_.Repo -eq $module.Repo })
+
+  $availableVersions = (invoke-webrequest "https://api.github.com/repos/$($module.Owner)/$($module.Repo)/releases" -UseBasicParsing).Content | ConvertFrom-Json | Select-Object tag_name
+
+  # If the mode is undefined, set to 'upgrade'
+  if ($module.Mode) {
+    $mode = $module.Mode.tolower()
+  }
+  else {
+    $mode = "upgrade"
+    $Module | Add-Member -Name 'Mode' -Type NoteProperty -Value "upgrade"
+  }
+
   #If the version is undefined, set to latest
+  Write-Output "Latest $($module.Repo) version: $($availableVersions.tag_name[0])"
   if ($module.Version) {
-    $versionURL = "tags/$($module.Version)"
+    If ($module.Version.tolower() -eq "latest" ) {
+      $versionURL = "latest"
+      $module.Version = $availableVersions.tag_name[0]
+    }
+    else {$versionURL = "tags/$($module.Version)"}
+    Write-Output "Requested $($module.Repo) version: $($module.Version)"
   }
   else {
     $versionURL = "latest"
+    $Module | Add-Member -Name 'Version' -Type NoteProperty -Value $availableVersions.tag_name[0]
+    Write-Output "Requested $($module.Repo) version: $($module.Version)"
+  }
+  Write-Output "Discovered $($module.Repo) version: $($oldmodule.Version)"
+  #upgrade only
+  If ($oldModule.Version -ne $module.Version) {
+    [int]$intOld = [array]::indexof($availableVersions.tag_name,$oldModule.Version)
+    [int]$intNew = [array]::indexof($availableVersions.tag_name,$Module.Version)
+    If ($intNew -lt $intOld -or $intOld -eq -1) {
+      Write-Output "Existing version is older than desired, removing existing $($TargetPath)\$($module.FileName)"
+      Remove-Item "$($TargetPath)\$($module.FileName)" -Force
+    }
+  }
+  
+  # If a File is found, and a remove/replace is set, remove it
+  $moduleName = $module.FileName
+  if ((Test-Path "$($TargetPath)\$($moduleName)" -PathType Leaf) -and ("remove", "replace" -eq $mode)) {
+    Write-Output "Mode is set to '$mode', removing existing $($TargetPath)\$($moduleName)"
+    Remove-Item "$($TargetPath)\$($moduleName)" -Force
   }
 
-  # there is no version control in most modules, so the best we can do is see if a file exists
-  $moduleName = $module.FileName
-  if (!(Test-Path "$($TargetPath)\$($moduleName)" -PathType Leaf)) {  
+  if ((!(Test-Path "$($TargetPath)\$($moduleName)" -PathType Leaf)) -and ($mode -ne "remove")) {  
     try {
       $results = (invoke-webrequest "https://api.github.com/repos/$($module.Owner)/$($module.Repo)/releases/$($versionURL)" -UseBasicParsing).Content | ConvertFrom-Json
       $asset = $results.assets | Where-Object { $_.name -eq $module.DownloadName }
@@ -185,4 +223,10 @@ foreach ($module in $ExtraModules) {
       Write-Error "unable to find $($module.Repo) version $($module.Version)" -ErrorAction Stop
     }
   }
+
+  # Add module to json
+  $trackedModules += $module
 }
+
+#save module list to json
+$trackedModules | ConvertTo-Json | out-file $versionPath -Force
