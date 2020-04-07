@@ -146,11 +146,10 @@ $trackedModules = New-Object -TypeName "System.Collections.ArrayList"
 
 # import file if it exists, else start with an empty list
 $versionPath = "$($TargetPath.Trim("\"))\$($VersionControlFile)"
+$existingModules = New-Object -TypeName "System.Collections.ArrayList"
 if (Test-Path -Path $versionPath -type leaf) {
-  [System.Collections.ArrayList]$existingModules = Get-Content $versionPath | ConvertFrom-Json
-}
-else {
-  $existingModules = New-Object -TypeName "System.Collections.ArrayList"
+  Write-Output $versionPath
+  $existingModules += Get-Content $versionPath | ConvertFrom-Json
 }
 
 # looping all the defined modules
@@ -159,7 +158,7 @@ foreach ($module in $ExtraModules) {
   # If existing module is defined, grab its version
   $oldModule = ($existingModules | Where-Object { $_.Repo -eq $module.Repo })
 
-  $availableVersions = (invoke-webrequest "https://api.github.com/repos/$($module.Owner)/$($module.Repo)/releases" -UseBasicParsing).Content | ConvertFrom-Json | Select-Object tag_name
+  $availableVersions = (invoke-webrequest "https://api.github.com/repos/$($module.Owner)/$($module.Repo)/releases" -UseBasicParsing).Content | ConvertFrom-Json
 
   # If the mode is undefined, set to 'upgrade'
   if ($module.Mode) {
