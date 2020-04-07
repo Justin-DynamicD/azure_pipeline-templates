@@ -178,21 +178,20 @@ foreach ($module in $ExtraModules) {
       $module.Version = $availableVersions.tag_name[0]
     }
     else {$versionURL = "tags/$($module.Version)"}
-    Write-Output "Requested $($module.Repo) version: $($module.Version)"
   }
   else {
     $versionURL = "latest"
     $Module | Add-Member -Name 'Version' -Type NoteProperty -Value $availableVersions.tag_name[0]
-    Write-Output "Requested $($module.Repo) version: $($module.Version)"
   }
+  Write-Output "Requested $($module.Repo) version: $($module.Version)"
   Write-Output "Discovered $($module.Repo) version: $($oldmodule.Version)"
   #upgrade only
   If ($oldModule.Version -ne $module.Version) {
     [int]$intOld = [array]::indexof($availableVersions.tag_name,$oldModule.Version)
     [int]$intNew = [array]::indexof($availableVersions.tag_name,$Module.Version)
-    If ($intNew -lt $intOld -or $intOld -eq -1) {
+    If (($intNew -lt $intOld) -or $intOld -eq -1) {
       Write-Output "Existing version is older than desired, removing existing $($TargetPath)\$($module.FileName)"
-      Remove-Item "$($TargetPath)\$($module.FileName)" -Force
+      Remove-Item "$($TargetPath)\$($module.FileName)" -Force -ErrorAction SilentlyContinue | Out-Null
     }
   }
   
@@ -225,7 +224,9 @@ foreach ($module in $ExtraModules) {
   }
 
   # Add module to json
-  $trackedModules += $module
+  if ($mode -ne "remove") {
+    $trackedModules += $module
+  }
 }
 
 #save module list to json
