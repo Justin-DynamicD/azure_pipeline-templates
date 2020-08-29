@@ -28,7 +28,8 @@ param (
       Owner = "rgl" 
       Repo = "packer-provisioner-windows-update"
       FileName = "packer-provisioner-windows-update.exe"
-      DownloadName = "packer-provisioner-windows-update-windows.zip"
+      DownloadName = "packer-provisioner-windows-update_0.10.1_windows_amd64.zip"
+      Version = "v0.10.1"
       Unzip = $true
     }
     [PSCustomObject]@{ 
